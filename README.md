@@ -29,7 +29,7 @@ git clone https://github.com/zhangjinsong3/SOLOv2.tensorRT
 - Training according to the steps in <a href="README_SOLO.md" alt="链接">SOLO🔗</a>
 
 
-### Deploy [<a href="deploy/readme.md" alt="链接">more🔗</a>]
+### Deploy [<a href="deploy/readme.md" alt="链接">detail🔗</a>]
 - set `ONNX_EXPORT=True` in  `mmdet.deploy_params.py`
 
 - `cd deploy`
