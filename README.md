@@ -2,7 +2,7 @@
 
 **NOTE**: code based on [WXinlong/SOLO](https://github.com/WXinlong/SOLO)
 
-add support for TensorRT inference
+add support to TensorRT inference
 
 - [x] onnxruntime
 - [x] tensorRT
@@ -26,7 +26,7 @@ git clone https://github.com/zhangjinsong3/SOLOv2.tensorRT
 
 ### Train
 - set `ONNX_EXPORT=False` in  `mmdet.deploy_params.py`
-- Training according the step in <a href="README_SOLO.md" alt="链接">SOLO🔗</a>
+- Training according to the steps in <a href="README_SOLO.md" alt="链接">SOLO🔗</a>
 
 
 ### Deploy
