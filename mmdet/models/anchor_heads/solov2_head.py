@@ -8,6 +8,7 @@ from mmdet.core import multi_apply, matrix_nms
 from ..builder import build_loss
 from ..registry import HEADS
 from ..utils import bias_init_with_prob, ConvModule
+from mmdet.deploy_params import ONNX_BATCH_SIZE, ONNX_EXPORT
 
 INF = 1e8
 
@@ -138,27 +139,56 @@ class SOLOv2Head(nn.Module):
         cate_pred, kernel_pred = multi_apply(self.forward_single, new_feats,
                                                        list(range(len(self.seg_num_grids))),
                                                        eval=eval, upsampled_size=upsampled_size)
+        if ONNX_EXPORT:
+            num_levels = len(cate_pred)
+            cate_pred_list, kernel_pred_list = [], []
+            for b in range(ONNX_BATCH_SIZE):
+                cate_pred_all = [
+                    cate_pred[i][b].view(-1, self.cate_out_channels).detach() for i in range(num_levels)
+                ]
+                kernel_pred_all = [
+                    kernel_pred[i][b].permute(1, 2, 0).view(-1, self.kernel_out_channels).detach()
+                    for i in range(num_levels)
+                ]
+                cate_pred_list.append(torch.cat(cate_pred_all, dim=0))
+                kernel_pred_list.append(torch.cat(kernel_pred_all, dim=0))
+            return cate_pred_list, kernel_pred_list
         return cate_pred, kernel_pred
 
     def split_feats(self, feats):
-        return (F.interpolate(feats[0], scale_factor=0.5, mode='bilinear'),
+        down_size = (int(0.5 * feats[0].size()[2]), int(0.5 * feats[0].size()[3]))
+        min_size = (int(feats[3].size()[-2]), int(feats[3].size()[-1]))
+        return (F.interpolate(feats[0], size=down_size, mode='bilinear'),
                 feats[1],
                 feats[2],
                 feats[3],
-                F.interpolate(feats[4], size=feats[3].shape[-2:], mode='bilinear'))
+                F.interpolate(feats[4], size=min_size, mode='bilinear'))
 
     def forward_single(self, x, idx, eval=False, upsampled_size=None):
         ins_kernel_feat = x
         # ins branch
         # concat coord
-        x_range = torch.linspace(-1, 1, ins_kernel_feat.shape[-1], device=ins_kernel_feat.device)
-        y_range = torch.linspace(-1, 1, ins_kernel_feat.shape[-2], device=ins_kernel_feat.device)
-        y, x = torch.meshgrid(y_range, x_range)
-        y = y.expand([ins_kernel_feat.shape[0], 1, -1, -1])
-        x = x.expand([ins_kernel_feat.shape[0], 1, -1, -1])
+        if ONNX_EXPORT:
+            # ZJS modify for onnx export, frozen batch size
+            feat_h, feat_w = ins_kernel_feat.shape[-2], ins_kernel_feat.shape[-1]  # shape get tensor during onnx.export()
+            feat_h, feat_w = int(feat_h.cpu().numpy() if isinstance(feat_h, torch.Tensor) else feat_h), \
+                             int(feat_w.cpu().numpy() if isinstance(feat_w, torch.Tensor) else feat_w)
+            x_range = torch.linspace(-1, 1, feat_w, device=ins_kernel_feat.device)
+            y_range = torch.linspace(-1, 1, feat_h, device=ins_kernel_feat.device)
+            y, x = torch.meshgrid(y_range, x_range)
+            y = y.expand([ONNX_BATCH_SIZE, 1, -1, -1])
+            x = x.expand([ONNX_BATCH_SIZE, 1, -1, -1])
+        else:
+            # ORIGIN
+            x_range = torch.linspace(-1, 1, ins_kernel_feat.shape[-1], device=ins_kernel_feat.device)
+            y_range = torch.linspace(-1, 1, ins_kernel_feat.shape[-2], device=ins_kernel_feat.device)
+            y, x = torch.meshgrid(y_range, x_range)
+            y = y.expand([ins_kernel_feat.shape[0], 1, -1, -1])
+            x = x.expand([ins_kernel_feat.shape[0], 1, -1, -1])
+
         coord_feat = torch.cat([x, y], 1)
         ins_kernel_feat = torch.cat([ins_kernel_feat, coord_feat], 1)
-        
+
         # kernel branch
         kernel_feat = ins_kernel_feat
         seg_num_grid = self.seg_num_grids[idx]
@@ -362,20 +392,25 @@ class SOLOv2Head(nn.Module):
 
         result_list = []
         for img_id in range(len(img_metas)):
-            cate_pred_list = [
-                cate_preds[i][img_id].view(-1, self.cate_out_channels).detach() for i in range(num_levels)
-            ]
-            seg_pred_list = seg_pred[img_id, ...].unsqueeze(0)
-            kernel_pred_list = [
-                kernel_preds[i][img_id].permute(1, 2, 0).view(-1, self.kernel_out_channels).detach()
-                                for i in range(num_levels)
-            ]
+            if ONNX_EXPORT:
+                cate_pred_list = cate_preds[img_id]
+                kernel_pred_list = kernel_preds[img_id]
+                seg_pred_list = seg_pred[img_id, ...].unsqueeze(0)
+            else:
+                cate_pred_list = [
+                    cate_preds[i][img_id].view(-1, self.cate_out_channels).detach() for i in range(num_levels)
+                ]
+                seg_pred_list = seg_pred[img_id, ...].unsqueeze(0)
+                kernel_pred_list = [
+                    kernel_preds[i][img_id].permute(1, 2, 0).view(-1, self.kernel_out_channels).detach()
+                                    for i in range(num_levels)
+                ]
+                cate_pred_list = torch.cat(cate_pred_list, dim=0)
+                kernel_pred_list = torch.cat(kernel_pred_list, dim=0)
+
             img_shape = img_metas[img_id]['img_shape']
             scale_factor = img_metas[img_id]['scale_factor']
             ori_shape = img_metas[img_id]['ori_shape']
-
-            cate_pred_list = torch.cat(cate_pred_list, dim=0)
-            kernel_pred_list = torch.cat(kernel_pred_list, dim=0)
 
             result = self.get_seg_single(cate_pred_list, seg_pred_list, kernel_pred_list,
                                          featmap_size, img_shape, ori_shape, scale_factor, cfg, rescale)

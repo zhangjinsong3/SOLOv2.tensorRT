@@ -109,10 +109,15 @@ class FPN(nn.Module):
         ]
 
         # build top-down path
+        # upconv = nn.ConvTranspose2d(inner_nc * 2, outer_nc,
+        #                             kernel_size=4, stride=2,
+        #                             padding=1)
+        # TODO (zjs): tensorRT do not support interpolate with scale_factor, use size instead!
         used_backbone_levels = len(laterals)
         for i in range(used_backbone_levels - 1, 0, -1):
+            size_h, size_w = 2 * laterals[i].shape[-2], 2 * laterals[i].shape[-1]
             laterals[i - 1] += F.interpolate(
-                laterals[i], scale_factor=2, mode='nearest')
+                laterals[i], size=(size_h, size_w), mode='nearest')
 
         # build outputs
         # part 1: from original levels

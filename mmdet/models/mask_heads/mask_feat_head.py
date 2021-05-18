@@ -5,6 +5,7 @@ from mmcv.cnn import xavier_init, normal_init
 from ..registry import HEADS
 from ..builder import build_loss
 from ..utils import ConvModule
+from mmdet.deploy_params import ONNX_EXPORT, ONNX_BATCH_SIZE
 
 import torch
 import numpy as np
@@ -105,14 +106,32 @@ class MaskFeatHead(nn.Module):
             input_p = inputs[i]
             if i == 3:
                 input_feat = input_p
-                x_range = torch.linspace(-1, 1, input_feat.shape[-1], device=input_feat.device)
-                y_range = torch.linspace(-1, 1, input_feat.shape[-2], device=input_feat.device)
-                y, x = torch.meshgrid(y_range, x_range)
-                y = y.expand([input_feat.shape[0], 1, -1, -1])
-                x = x.expand([input_feat.shape[0], 1, -1, -1])
+                if ONNX_EXPORT:
+                    feat_h, feat_w = input_feat.shape[-2], input_feat.shape[-1]  # shape get tensor during onnx.export()
+                    feat_h, feat_w = int(feat_h.cpu().numpy() if isinstance(feat_h, torch.Tensor) else feat_h), \
+                                     int(feat_w.cpu().numpy() if isinstance(feat_w, torch.Tensor) else feat_w)
+                    x_range = torch.linspace(-1, 1, feat_w, device=input_feat.device)
+                    y_range = torch.linspace(-1, 1, feat_h, device=input_feat.device)
+                    y, x = torch.meshgrid(y_range, x_range)
+                    y = y.expand([ONNX_BATCH_SIZE, 1, -1, -1])
+                    x = x.expand([ONNX_BATCH_SIZE, 1, -1, -1])
+                else:
+                    x_range = torch.linspace(-1, 1, input_feat.shape[-1], device=input_feat.device)
+                    y_range = torch.linspace(-1, 1, input_feat.shape[-2], device=input_feat.device)
+                    y, x = torch.meshgrid(y_range, x_range)
+                    y = y.expand([input_feat.shape[0], 1, -1, -1])
+                    x = x.expand([input_feat.shape[0], 1, -1, -1])
                 coord_feat = torch.cat([x, y], 1)
                 input_p = torch.cat([input_p, coord_feat], 1)
-                
+
+            if ONNX_EXPORT:
+                n, c, h, w = input_p.shape
+                for k, m in self.convs_all_levels[i]._modules.items():
+                    if "upsample" in k:
+                        m.scale_factor = None
+                        h, w = 2 * h, 2 * w
+                        m.size = (h, w)
+
             feature_add_all_level += self.convs_all_levels[i](input_p)
 
         feature_pred = self.conv_pred(feature_add_all_level)

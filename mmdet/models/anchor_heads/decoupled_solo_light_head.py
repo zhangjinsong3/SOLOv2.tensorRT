@@ -8,6 +8,7 @@ from mmdet.core import multi_apply, bbox2roi, matrix_nms
 from ..builder import build_loss
 from ..registry import HEADS
 from ..utils import bias_init_with_prob, ConvModule
+from mmdet.deploy_params import ONNX_BATCH_SIZE, ONNX_EXPORT
 
 INF = 1e8
 
@@ -160,11 +161,24 @@ class DecoupledSOLOLightHead(nn.Module):
         cate_feat = x
         # ins branch
         # concat coord
-        x_range = torch.linspace(-1, 1, ins_feat.shape[-1], device=ins_feat.device)
-        y_range = torch.linspace(-1, 1, ins_feat.shape[-2], device=ins_feat.device)
-        y, x = torch.meshgrid(y_range, x_range)
-        y = y.expand([ins_feat.shape[0], 1, -1, -1])
-        x = x.expand([ins_feat.shape[0], 1, -1, -1])
+        if ONNX_EXPORT:
+            # zjs: modify for onnx export, frozen batch size
+            feat_h, feat_w = ins_feat.shape[-2], ins_feat.shape[-1]
+            feat_h, feat_w = int(feat_h.cpu().numpy() if isinstance(feat_h, torch.Tensor) else feat_h),\
+                             int(feat_w.cpu().numpy() if isinstance(feat_w, torch.Tensor) else feat_w)
+            x_range = torch.linspace(-1, 1, feat_w, device=ins_feat.device)
+            y_range = torch.linspace(-1, 1, feat_h, device=ins_feat.device)
+            y, x = torch.meshgrid(y_range, x_range)
+            y = y.expand([ONNX_BATCH_SIZE, 1, -1, -1])
+            x = x.expand([ONNX_BATCH_SIZE, 1, -1, -1])
+        else:
+            # ORIGIN
+            x_range = torch.linspace(-1, 1, ins_feat.shape[-1], device=ins_feat.device)
+            y_range = torch.linspace(-1, 1, ins_feat.shape[-2], device=ins_feat.device)
+            y, x = torch.meshgrid(y_range, x_range)
+            y = y.expand([ins_feat.shape[0], 1, -1, -1])
+            x = x.expand([ins_feat.shape[0], 1, -1, -1])
+
         coord_feat = torch.cat([x, y], 1)
         ins_feat = torch.cat([ins_feat, coord_feat], 1)
 

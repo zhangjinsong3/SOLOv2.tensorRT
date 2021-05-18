@@ -4,7 +4,7 @@ from mmdet.core import bbox2result
 from .. import builder
 from ..registry import DETECTORS
 from .base import BaseDetector
-
+from mmdet.deploy_params import ONNX_EXPORT, ONNX_BATCH_SIZE
 
 @DETECTORS.register_module
 class SingleStageInsDetector(BaseDetector):
@@ -54,7 +54,12 @@ class SingleStageInsDetector(BaseDetector):
 
     def forward_dummy(self, img):
         x = self.extract_feat(img)
-        outs = self.bbox_head(x)
+        outs = self.bbox_head(x, eval=True)
+        if self.with_mask_feat_head:
+            mask_feat_pred = self.mask_feat_head(
+                x[self.mask_feat_head.
+                  start_level:self.mask_feat_head.end_level + 1])
+            outs = (outs[0], outs[1], mask_feat_pred)
         return outs
 
     def forward_train(self,
@@ -89,6 +94,7 @@ class SingleStageInsDetector(BaseDetector):
             seg_inputs = outs + (mask_feat_pred, img_meta, self.test_cfg, rescale)
         else:
             seg_inputs = outs + (img_meta, self.test_cfg, rescale)
+
         seg_result = self.bbox_head.get_seg(*seg_inputs)
         return seg_result  
 

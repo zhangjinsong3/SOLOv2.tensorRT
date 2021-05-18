@@ -8,6 +8,7 @@ from mmdet.core import multi_apply, matrix_nms
 from ..builder import build_loss
 from ..registry import HEADS
 from ..utils import bias_init_with_prob, ConvModule
+from mmdet.deploy_params import ONNX_BATCH_SIZE, ONNX_EXPORT
 
 INF = 1e8
 
@@ -151,14 +152,27 @@ class SOLOv2LightHead(nn.Module):
         ins_kernel_feat = x
         # ins branch
         # concat coord
-        x_range = torch.linspace(-1, 1, ins_kernel_feat.shape[-1], device=ins_kernel_feat.device)
-        y_range = torch.linspace(-1, 1, ins_kernel_feat.shape[-2], device=ins_kernel_feat.device)
-        y, x = torch.meshgrid(y_range, x_range)
-        y = y.expand([ins_kernel_feat.shape[0], 1, -1, -1])
-        x = x.expand([ins_kernel_feat.shape[0], 1, -1, -1])
+        if ONNX_EXPORT:
+            # ZJS modify for onnx export, frozen batch size
+            feat_h, feat_w = ins_kernel_feat.shape[-2], ins_kernel_feat.shape[-1]
+            feat_h, feat_w = int(feat_h.cpu().numpy() if isinstance(feat_h, torch.Tensor) else feat_h), \
+                             int(feat_w.cpu().numpy() if isinstance(feat_w, torch.Tensor) else feat_w)
+            x_range = torch.linspace(-1, 1, feat_w, device=ins_kernel_feat.device)
+            y_range = torch.linspace(-1, 1, feat_h, device=ins_kernel_feat.device)
+            y, x = torch.meshgrid(y_range, x_range)
+            y = y.expand([ONNX_BATCH_SIZE, 1, -1, -1])
+            x = x.expand([ONNX_BATCH_SIZE, 1, -1, -1])
+        else:
+            # Origin SOLOv2
+            x_range = torch.linspace(-1, 1, ins_kernel_feat.shape[-1], device=ins_kernel_feat.device)
+            y_range = torch.linspace(-1, 1, ins_kernel_feat.shape[-2], device=ins_kernel_feat.device)
+            y, x = torch.meshgrid(y_range, x_range)
+            y = y.expand([ins_kernel_feat.shape[0], 1, -1, -1])
+            x = x.expand([ins_kernel_feat.shape[0], 1, -1, -1])
+
         coord_feat = torch.cat([x, y], 1)
         ins_kernel_feat = torch.cat([ins_kernel_feat, coord_feat], 1)
-        
+
         # kernel branch
         kernel_feat = ins_kernel_feat
         seg_num_grid = self.seg_num_grids[idx]
