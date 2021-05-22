@@ -1,4 +1,4 @@
-# DBNet.tensorRT: 
+# SOLOv2.tensorRT: 
 
 **NOTE**: code based on [WXinlong/SOLO](https://github.com/WXinlong/SOLO)
 
